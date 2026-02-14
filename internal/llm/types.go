@@ -40,6 +40,13 @@ type Response struct {
 	Message Message
 }
 
+// ModelInfo describes a model available on the provider.
+type ModelInfo struct {
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedAt string `json:"modified_at"`
+}
+
 // Helper constructors
 
 func SystemMessage(content string) Message {

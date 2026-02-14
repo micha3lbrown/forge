@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,8 +23,9 @@ type Client interface {
 
 // OpenAICompatClient works with any OpenAI-compatible API (Ollama, Claude, Gemini).
 type OpenAICompatClient struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	baseURL string
 }
 
 // NewClient creates an LLM client for the given provider.
@@ -32,8 +35,9 @@ func NewClient(baseURL, apiKey, model string) *OpenAICompatClient {
 		option.WithAPIKey(apiKey),
 	)
 	return &OpenAICompatClient{
-		client: &client,
-		model:  model,
+		client:  &client,
+		model:   model,
+		baseURL: baseURL,
 	}
 }
 
@@ -145,4 +149,51 @@ func convertTools(tools []ToolDef) []openai.ChatCompletionToolParam {
 		})
 	}
 	return out
+}
+
+// ListModels queries Ollama's native /api/tags endpoint for available models.
+// The baseURL is expected to end with /v1/ (OpenAI-compat); we strip that to
+// reach the native Ollama API.
+func (c *OpenAICompatClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	// Strip /v1/ suffix to get Ollama's base, e.g. "http://host:11434/v1/" -> "http://host:11434"
+	base := strings.TrimRight(c.baseURL, "/")
+	base = strings.TrimSuffix(base, "/v1")
+	url := base + "/api/tags"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Models []struct {
+			Name       string `json:"name"`
+			Size       int64  `json:"size"`
+			ModifiedAt string `json:"modified_at"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	models := make([]ModelInfo, len(result.Models))
+	for i, m := range result.Models {
+		models[i] = ModelInfo{
+			Name:       m.Name,
+			Size:       m.Size,
+			ModifiedAt: m.ModifiedAt,
+		}
+	}
+	return models, nil
 }

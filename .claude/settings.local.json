@@ -14,7 +14,22 @@
       "Bash(go mod tidy:*)",
       "Bash(go build:*)",
       "Bash(go env:*)",
-      "Bash(./bin/forge:*)"
+      "Bash(./bin/forge:*)",
+      "Bash(curl:*)",
+      "Bash(./forge chat:*)",
+      "Bash(printf 'What files are in the current directory?\\\\n/quit\\\\n')",
+      "Bash(make build:*)",
+      "WebFetch(domain:navendu.me)",
+      "WebFetch(domain:gyliu513.medium.com)",
+      "Bash(git clone:*)",
+      "Bash(make test:*)",
+      "Bash(go test:*)",
+      "Bash(go run:*)",
+      "Bash(nc:*)",
+      "Bash(/usr/bin/curl:*)",
+      "Bash(wc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

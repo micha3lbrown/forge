@@ -65,6 +65,11 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+// IsOllama returns true if this provider looks like an Ollama instance.
+func (p ProviderConfig) IsOllama() bool {
+	return strings.Contains(p.BaseURL, ":11434") || strings.Contains(strings.ToLower(p.BaseURL), "ollama")
+}
+
 // Provider returns the config for a named provider, falling back to the default.
 func (c *Config) Provider(name string) (ProviderConfig, error) {
 	if name == "" {

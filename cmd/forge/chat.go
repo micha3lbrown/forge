@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -71,6 +73,14 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if model == "" {
 		if profile != nil && profile.Model != "" {
 			model = profile.Model
+		} else if provider.IsOllama() {
+			// Try interactive model selection for Ollama
+			picked, err := pickOllamaModel(provider, provider.Models["default"])
+			if err == nil {
+				model = picked
+			} else {
+				model = provider.Models["default"]
+			}
 		} else {
 			model = provider.Models["default"]
 		}
@@ -231,4 +241,50 @@ func handleCommand(input string, a *agent.Agent) bool {
 		fmt.Printf("Unknown command: %s (try /help)\n\n", input)
 	}
 	return true
+}
+
+// pickOllamaModel queries Ollama for available models and lets the user choose.
+func pickOllamaModel(provider config.ProviderConfig, defaultModel string) (string, error) {
+	client := llm.NewClient(provider.BaseURL, provider.APIKey, "")
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		return "", err
+	}
+	if len(models) == 0 {
+		return "", fmt.Errorf("no models available")
+	}
+
+	fmt.Println("Available models:")
+	defaultIdx := -1
+	for i, m := range models {
+		sizeGB := float64(m.Size) / (1024 * 1024 * 1024)
+		marker := "  "
+		if m.Name == defaultModel {
+			marker = "* "
+			defaultIdx = i
+		}
+		fmt.Printf("  %s%d) %-30s (%.1f GB)\n", marker, i+1, m.Name, sizeGB)
+	}
+
+	defaultHint := ""
+	if defaultIdx >= 0 {
+		defaultHint = fmt.Sprintf(" [%d]", defaultIdx+1)
+	}
+	fmt.Printf("\nSelect model%s: ", defaultHint)
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return "", fmt.Errorf("no input")
+	}
+	choice := strings.TrimSpace(scanner.Text())
+
+	if choice == "" && defaultIdx >= 0 {
+		return models[defaultIdx].Name, nil
+	}
+
+	n, err := strconv.Atoi(choice)
+	if err != nil || n < 1 || n > len(models) {
+		return "", fmt.Errorf("invalid selection: %s", choice)
+	}
+	return models[n-1].Name, nil
 }
