@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/michaelbrown/forge/internal/llm"
+	"github.com/michaelbrown/forge/internal/tools"
 )
 
 const defaultSystemPrompt = `You are Forge, a helpful AI assistant with access to tools.
@@ -16,25 +17,59 @@ Always explain what you're doing and why. After using a tool, interpret the resu
 
 // Agent manages a conversation and executes the ReAct loop.
 type Agent struct {
-	llm       llm.Client
-	history   []llm.Message
-	tools     []llm.ToolDef
-	maxIter   int
-	OnToolCall func(name string, args map[string]any)
+	llm          llm.Client
+	registry     *tools.Registry
+	history      []llm.Message
+	tools        []llm.ToolDef
+	maxIter      int
+	OnToolCall   func(name string, args map[string]any)
 	OnToolResult func(name string, result string)
+	OnTextDelta  func(delta string)
 }
 
-// New creates an Agent with the given LLM client and iteration limit.
-func New(client llm.Client, maxIterations int) *Agent {
+// New creates an Agent with the given LLM client, tool registry, and iteration limit.
+func New(client llm.Client, registry *tools.Registry, maxIterations int) *Agent {
 	a := &Agent{
-		llm:     client,
-		maxIter: maxIterations,
+		llm:      client,
+		registry: registry,
+		maxIter:  maxIterations,
 		history: []llm.Message{
 			llm.SystemMessage(defaultSystemPrompt),
 		},
 	}
-	a.tools = a.builtinTools()
+
+	// Use registry tools if available, otherwise fall back to builtins
+	if registry != nil && registry.HasTools() {
+		a.tools = registry.AllTools()
+	} else {
+		a.tools = a.builtinTools()
+	}
 	return a
+}
+
+// SetSystemPrompt overrides the default system prompt.
+func (a *Agent) SetSystemPrompt(prompt string) {
+	if prompt != "" {
+		a.history[0] = llm.SystemMessage(prompt)
+	}
+}
+
+// FilterTools restricts available tools to the given names.
+func (a *Agent) FilterTools(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	allowed := make(map[string]bool, len(names))
+	for _, n := range names {
+		allowed[n] = true
+	}
+	var filtered []llm.ToolDef
+	for _, t := range a.tools {
+		if allowed[t.Name] {
+			filtered = append(filtered, t)
+		}
+	}
+	a.tools = filtered
 }
 
 // Run sends a user message and executes the full ReAct loop.
@@ -75,8 +110,52 @@ func (a *Agent) Run(ctx context.Context, userMessage string) (string, error) {
 	return "", fmt.Errorf("agent reached max iterations (%d) without a final response", a.maxIter)
 }
 
-// executeTool dispatches a tool call to the appropriate handler.
+// RunStreaming is like Run but streams text output token-by-token via OnTextDelta.
+func (a *Agent) RunStreaming(ctx context.Context, userMessage string) (string, error) {
+	a.history = append(a.history, llm.UserMessage(userMessage))
+
+	for i := 0; i < a.maxIter; i++ {
+		resp, err := a.llm.ChatCompletionStream(ctx, a.history, a.tools, a.OnTextDelta)
+		if err != nil {
+			return "", fmt.Errorf("llm call (iteration %d): %w", i+1, err)
+		}
+
+		a.history = append(a.history, resp.Message)
+
+		if len(resp.Message.ToolCalls) == 0 {
+			return resp.Message.Content, nil
+		}
+
+		for _, tc := range resp.Message.ToolCalls {
+			if a.OnToolCall != nil {
+				a.OnToolCall(tc.Name, tc.Args)
+			}
+
+			result := a.executeTool(ctx, tc)
+
+			if a.OnToolResult != nil {
+				a.OnToolResult(tc.Name, result)
+			}
+
+			a.history = append(a.history, llm.ToolResultMessage(tc.ID, result))
+		}
+	}
+
+	return "", fmt.Errorf("agent reached max iterations (%d) without a final response", a.maxIter)
+}
+
+// executeTool dispatches a tool call to the registry or builtin handler.
 func (a *Agent) executeTool(ctx context.Context, tc llm.ToolCall) string {
+	// Try registry first
+	if a.registry != nil && a.registry.HasTools() {
+		result, err := a.registry.CallTool(ctx, tc.Name, tc.Args)
+		if err != nil {
+			return fmt.Sprintf("error: %s", err)
+		}
+		return result
+	}
+
+	// Builtin fallback
 	switch tc.Name {
 	case "shell_exec":
 		return a.toolShellExec(ctx, tc.Args)

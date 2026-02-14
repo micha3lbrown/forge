@@ -12,9 +12,12 @@ import (
 	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
 
+	"path/filepath"
+
 	"github.com/michaelbrown/forge/internal/agent"
 	"github.com/michaelbrown/forge/internal/config"
 	"github.com/michaelbrown/forge/internal/llm"
+	"github.com/michaelbrown/forge/internal/tools"
 )
 
 var chatCmd = &cobra.Command{
@@ -40,9 +43,23 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	// Load agent profile if specified
+	var profile *agent.Profile
+	if profileFlag != "" {
+		profilePath := filepath.Join(cfg.Agent.ProfilesDir, profileFlag+".yaml")
+		profile, err = agent.LoadProfile(profilePath)
+		if err != nil {
+			return fmt.Errorf("loading profile: %w", err)
+		}
+	}
+
 	providerName := providerFlag
 	if providerName == "" {
-		providerName = cfg.DefaultProvider
+		if profile != nil && profile.Provider != "" {
+			providerName = profile.Provider
+		} else {
+			providerName = cfg.DefaultProvider
+		}
 	}
 
 	provider, err := cfg.Provider(providerName)
@@ -52,17 +69,55 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	model := modelFlag
 	if model == "" {
-		model = provider.Models["default"]
+		if profile != nil && profile.Model != "" {
+			model = profile.Model
+		} else {
+			model = provider.Models["default"]
+		}
+	}
+
+	maxIter := cfg.Agent.MaxIterations
+	if profile != nil && profile.MaxIter > 0 {
+		maxIter = profile.MaxIter
 	}
 
 	fmt.Printf("Forge - Interactive Agent Chat\n")
+	if profile != nil {
+		fmt.Printf("Profile: %s\n", profile.Name)
+	}
 	fmt.Printf("Provider: %s | Model: %s\n", providerName, model)
+
+	// Create tool registry from config
+	registry := tools.NewRegistry()
+	defer registry.Close()
+
+	for name, toolCfg := range cfg.Tools {
+		if err := registry.Register(name, toolCfg); err != nil {
+			fmt.Printf("Warning: failed to start tool server %s: %v\n", name, err)
+		}
+	}
+
+	if registry.HasTools() {
+		fmt.Printf("Tools: MCP servers loaded\n")
+	} else {
+		fmt.Printf("Tools: builtin shell_exec\n")
+	}
+
 	fmt.Printf("Type /help for commands, /quit to exit\n\n")
 
 	client := llm.NewClient(provider.BaseURL, provider.APIKey, model)
-	a := agent.New(client, cfg.Agent.MaxIterations)
+	a := agent.New(client, registry, maxIter)
 
-	// Wire up tool call callbacks for display
+	// Apply profile overrides
+	if profile != nil {
+		a.SetSystemPrompt(profile.SystemPrompt)
+		a.FilterTools(profile.Tools)
+	}
+
+	// Wire up callbacks for display
+	a.OnTextDelta = func(delta string) {
+		fmt.Print(delta)
+	}
 	a.OnToolCall = func(name string, args map[string]any) {
 		fmt.Printf("\n  \033[33m⚡ Tool: %s\033[0m\n", agent.FormatToolCall(name, args))
 	}
@@ -94,14 +149,17 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 	defer rl.Close()
 
-	// Handle Ctrl+C gracefully
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Per-request cancellation: Ctrl+C cancels the active LLM request,
+	// not the whole app. A second Ctrl+C while idle exits.
+	var reqCancel context.CancelFunc
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		cancel()
+		for range sigCh {
+			if reqCancel != nil {
+				reqCancel()
+			}
+		}
 	}()
 
 	for {
@@ -126,19 +184,27 @@ func runChat(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Run the agent
+		// Create a per-request context so Ctrl+C only cancels this request
+		reqCtx, cancel := context.WithCancel(context.Background())
+		reqCancel = cancel
+
+		// Run the agent with streaming output
 		fmt.Printf("\n\033[32mforge>\033[0m ")
-		response, err := a.Run(ctx, input)
+		_, err = a.RunStreaming(reqCtx, input)
+		wasInterrupted := reqCtx.Err() != nil
+		cancel()
+		reqCancel = nil
+
 		if err != nil {
-			if ctx.Err() != nil {
+			if wasInterrupted {
 				fmt.Println("\n(interrupted)")
-				return nil
+				continue
 			}
 			fmt.Printf("\n\033[31merror: %s\033[0m\n\n", err)
 			continue
 		}
 
-		fmt.Printf("%s\n\n", response)
+		fmt.Printf("\n\n")
 	}
 }
 
@@ -149,7 +215,8 @@ func handleCommand(input string, a *agent.Agent) bool {
 		os.Exit(0)
 	case "/reset":
 		a.Reset()
-		fmt.Println("Conversation reset.\n")
+		fmt.Println("Conversation reset.")
+		fmt.Println()
 	case "/history":
 		fmt.Println(a.HistoryJSON())
 		fmt.Println()

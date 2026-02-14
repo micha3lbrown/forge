@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/michaelbrown/forge/internal/tools"
 )
 
 type ProviderConfig struct {
@@ -15,7 +17,8 @@ type ProviderConfig struct {
 }
 
 type AgentConfig struct {
-	MaxIterations int `mapstructure:"max_iterations"`
+	MaxIterations int    `mapstructure:"max_iterations"`
+	ProfilesDir   string `mapstructure:"profiles_dir"`
 }
 
 type ServerConfig struct {
@@ -23,10 +26,11 @@ type ServerConfig struct {
 }
 
 type Config struct {
-	Providers       map[string]ProviderConfig `mapstructure:"providers"`
-	DefaultProvider string                    `mapstructure:"default_provider"`
-	Agent           AgentConfig               `mapstructure:"agent"`
-	Server          ServerConfig              `mapstructure:"server"`
+	Providers       map[string]ProviderConfig        `mapstructure:"providers"`
+	DefaultProvider string                           `mapstructure:"default_provider"`
+	Agent           AgentConfig                      `mapstructure:"agent"`
+	Server          ServerConfig                     `mapstructure:"server"`
+	Tools           map[string]tools.ToolServerConfig `mapstructure:"tools"`
 }
 
 func Load() (*Config, error) {

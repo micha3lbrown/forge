@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -14,6 +16,7 @@ import (
 // Client is the interface for LLM interactions.
 type Client interface {
 	ChatCompletion(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error)
+	ChatCompletionStream(ctx context.Context, messages []Message, tools []ToolDef, handler StreamHandler) (*Response, error)
 }
 
 // OpenAICompatClient works with any OpenAI-compatible API (Ollama, Claude, Gemini).
@@ -44,9 +47,23 @@ func (c *OpenAICompatClient) ChatCompletion(ctx context.Context, messages []Mess
 		params.Tools = convertTools(tools)
 	}
 
-	completion, err := c.client.Chat.Completions.New(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("chat completion: %w", err)
+	var completion *openai.ChatCompletion
+	var err error
+	for attempt := range 3 {
+		completion, err = c.client.Chat.Completions.New(ctx, params)
+		if err == nil {
+			break
+		}
+		if !strings.Contains(err.Error(), "429") || attempt == 2 {
+			return nil, fmt.Errorf("chat completion: %w", err)
+		}
+		wait := time.Duration(2<<attempt) * time.Second // 2s, 4s
+		fmt.Printf("\n  (rate limited, retrying in %s...)\n", wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, fmt.Errorf("chat completion: %w", ctx.Err())
+		}
 	}
 
 	if len(completion.Choices) == 0 {
@@ -110,7 +127,7 @@ func convertMessages(msgs []Message) []openai.ChatCompletionMessageParamUnion {
 				out = append(out, openai.AssistantMessage(m.Content))
 			}
 		case RoleTool:
-			out = append(out, openai.ToolMessage(m.ToolCallID, m.Content))
+			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
 		}
 	}
 	return out

@@ -1,6 +1,6 @@
 providers:
   ollama:
-    base_url: "http://localhost:11434/v1/"
+    base_url: "http://192.168.1.174:11434/v1/"
     api_key: "ollama"
     models:
       default: "qwen3:14b"
@@ -16,10 +16,32 @@ providers:
     models:
       default: "gemini-2.0-flash"
 
-default_provider: gemini
+default_provider: ollama
 
 agent:
   max_iterations: 10
+  profiles_dir: "configs/agents"
 
 server:
   port: 8080
+
+tools:
+  shell-exec:
+    binary: "bin/forge-tool-shell-exec"
+    enabled: true
+  file-ops:
+    binary: "bin/forge-tool-file-ops"
+    enabled: true
+  web-search:
+    binary: "bin/forge-tool-web-search"
+    enabled: true
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
+  github-ops:
+    binary: "bin/forge-tool-github-ops"
+    enabled: true
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+  code-runner:
+    binary: "bin/forge-tool-code-runner"
+    enabled: true

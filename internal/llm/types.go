@@ -32,6 +32,9 @@ type ToolDef struct {
 	Parameters  map[string]any `json:"parameters"` // JSON Schema
 }
 
+// StreamHandler receives text deltas during streaming.
+// (Defined here for interface usage; implementation in stream.go)
+
 // Response is the result of a chat completion call.
 type Response struct {
 	Message Message
