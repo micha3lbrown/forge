@@ -1,0 +1,25 @@
+providers:
+  ollama:
+    base_url: "http://localhost:11434/v1/"
+    api_key: "ollama"
+    models:
+      default: "qwen3:14b"
+      embedding: "nomic-embed-text"
+  claude:
+    base_url: "https://api.anthropic.com/v1/"
+    api_key: "${ANTHROPIC_API_KEY}"
+    models:
+      default: "claude-sonnet-4-5-20250929"
+  gemini:
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    api_key: "${GEMINI_API_KEY}"
+    models:
+      default: "gemini-2.0-flash"
+
+default_provider: gemini
+
+agent:
+  max_iterations: 10
+
+server:
+  port: 8080

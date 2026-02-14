@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(gh repo view:*)",
+      "Bash(go mod init:*)",
+      "Bash(brew list:*)",
+      "Bash(asdf list:*)",
+      "Bash(asdf plugin list:*)",
+      "Bash(asdf plugin-list:*)",
+      "Bash(source:*)",
+      "Bash(go version:*)",
+      "Bash(go get:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(go env:*)",
+      "Bash(./bin/forge:*)"
+    ]
+  }
+}
