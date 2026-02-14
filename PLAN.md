@@ -27,12 +27,12 @@ Forge is a local-first agentic AI platform for learning and building with AI age
 ## Roadmap
 
 ### Phase 3 — Persistence & Context
-- [ ] Conversation persistence (save/load chat sessions)
-- [ ] Session management (list, resume, delete past conversations)
+- [x] Conversation persistence (save/load chat sessions)
+- [x] Session management (list, resume, delete past conversations)
+- [x] Chat export (markdown, JSON)
 - [ ] RAG pipeline — chunk, embed, and retrieve local documents
 - [ ] Vector storage backend (SQLite with vector extensions or similar)
 - [ ] Context window management (summarization, sliding window)
-- [ ] Chat export (markdown, JSON)
 
 ### Phase 4 — Server Mode & API
 - [ ] HTTP/WebSocket server (`forge serve`)

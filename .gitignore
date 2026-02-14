@@ -1,4 +1,5 @@
 bin/
+/forge
 .env
 *.exe
 *.dll

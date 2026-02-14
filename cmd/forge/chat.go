@@ -7,20 +7,24 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/chzyer/readline"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-
-	"path/filepath"
 
 	"github.com/michaelbrown/forge/internal/agent"
 	"github.com/michaelbrown/forge/internal/config"
 	"github.com/michaelbrown/forge/internal/llm"
+	"github.com/michaelbrown/forge/internal/storage"
+	"github.com/michaelbrown/forge/internal/storage/sqlite"
 	"github.com/michaelbrown/forge/internal/tools"
 )
+
+var resumeID string
 
 var chatCmd = &cobra.Command{
 	Use:   "chat",
@@ -31,11 +35,13 @@ The agent can use tools to help answer your questions.
 Examples:
   forge chat
   forge chat --provider claude
-  forge chat --provider ollama --model qwen3:8b`,
+  forge chat --provider ollama --model qwen3:8b
+  forge chat --resume <session-id>`,
 	RunE: runChat,
 }
 
 func init() {
+	chatCmd.Flags().StringVar(&resumeID, "resume", "", "Resume a previous session by ID or prefix")
 	rootCmd.AddCommand(chatCmd)
 }
 
@@ -44,6 +50,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	// Open storage
+	store, err := sqlite.Open(cfg.Storage.DBPath)
+	if err != nil {
+		return fmt.Errorf("opening storage: %w", err)
+	}
+	defer store.Close()
 
 	// Load agent profile if specified
 	var profile *agent.Profile
@@ -74,7 +87,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 		if profile != nil && profile.Model != "" {
 			model = profile.Model
 		} else if provider.IsOllama() {
-			// Try interactive model selection for Ollama
 			picked, err := pickOllamaModel(provider, provider.Models["default"])
 			if err == nil {
 				model = picked
@@ -113,8 +125,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Tools: builtin shell_exec\n")
 	}
 
-	fmt.Printf("Type /help for commands, /quit to exit\n\n")
-
 	client := llm.NewClient(provider.BaseURL, provider.APIKey, model)
 	a := agent.New(client, registry, maxIter)
 
@@ -124,6 +134,39 @@ func runChat(cmd *cobra.Command, args []string) error {
 		a.FilterTools(profile.Tools)
 	}
 
+	// Create or resume session
+	ctx := context.Background()
+	var sess *storage.Session
+
+	if resumeID != "" {
+		sess, err = store.GetSession(ctx, resumeID)
+		if err != nil {
+			return fmt.Errorf("loading session: %w", err)
+		}
+		messages, err := store.LoadMessages(ctx, sess.ID)
+		if err != nil {
+			return fmt.Errorf("loading messages: %w", err)
+		}
+		a.SetHistory(messages)
+		sess.Status = storage.StatusActive
+		store.UpdateSession(ctx, sess)
+		fmt.Printf("Session: %s (resumed)\n", sess.ID[:8])
+	} else {
+		sess = &storage.Session{
+			ID:       uuid.New().String(),
+			Status:   storage.StatusActive,
+			Provider: providerName,
+			Model:    model,
+			Profile:  profileFlag,
+		}
+		if err := store.CreateSession(ctx, sess); err != nil {
+			return fmt.Errorf("creating session: %w", err)
+		}
+		fmt.Printf("Session: %s\n", sess.ID[:8])
+	}
+
+	fmt.Printf("Type /help for commands, /quit to exit\n\n")
+
 	// Wire up callbacks for display
 	a.OnTextDelta = func(delta string) {
 		fmt.Print(delta)
@@ -132,7 +175,6 @@ func runChat(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\n  \033[33m⚡ Tool: %s\033[0m\n", agent.FormatToolCall(name, args))
 	}
 	a.OnToolResult = func(name string, result string) {
-		// Show first few lines of result
 		lines := strings.Split(strings.TrimSpace(result), "\n")
 		preview := lines
 		if len(preview) > 8 {
@@ -159,8 +201,15 @@ func runChat(cmd *cobra.Command, args []string) error {
 	}
 	defer rl.Close()
 
-	// Per-request cancellation: Ctrl+C cancels the active LLM request,
-	// not the whole app. A second Ctrl+C while idle exits.
+	// Mark session completed on exit
+	defer func() {
+		if sess.Status == storage.StatusActive {
+			sess.Status = storage.StatusCompleted
+			store.UpdateSession(ctx, sess)
+		}
+	}()
+
+	// Per-request cancellation
 	var reqCancel context.CancelFunc
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -171,6 +220,8 @@ func runChat(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}()
+
+	firstMessage := resumeID == "" // track if we need to generate a title
 
 	for {
 		input, err := rl.Readline()
@@ -194,6 +245,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// Auto-generate title from first user message
+		if firstMessage {
+			sess.Title = generateTitle(input)
+			store.UpdateSession(ctx, sess)
+			firstMessage = false
+		}
+
 		// Create a per-request context so Ctrl+C only cancels this request
 		reqCtx, cancel := context.WithCancel(context.Background())
 		reqCancel = cancel
@@ -204,6 +262,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 		wasInterrupted := reqCtx.Err() != nil
 		cancel()
 		reqCancel = nil
+
+		// Auto-save after each turn
+		if saveErr := store.SaveMessages(ctx, sess.ID, a.History()); saveErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to save session: %v\n", saveErr)
+		}
 
 		if err != nil {
 			if wasInterrupted {
@@ -216,6 +279,14 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("\n\n")
 	}
+}
+
+func generateTitle(firstMessage string) string {
+	t := strings.TrimSpace(firstMessage)
+	if len(t) > 80 {
+		t = t[:80] + "..."
+	}
+	return t
 }
 
 func handleCommand(input string, a *agent.Agent) bool {

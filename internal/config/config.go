@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -25,11 +26,16 @@ type ServerConfig struct {
 	Port int `mapstructure:"port"`
 }
 
+type StorageConfig struct {
+	DBPath string `mapstructure:"db_path"`
+}
+
 type Config struct {
 	Providers       map[string]ProviderConfig        `mapstructure:"providers"`
 	DefaultProvider string                           `mapstructure:"default_provider"`
 	Agent           AgentConfig                      `mapstructure:"agent"`
 	Server          ServerConfig                     `mapstructure:"server"`
+	Storage         StorageConfig                    `mapstructure:"storage"`
 	Tools           map[string]tools.ToolServerConfig `mapstructure:"tools"`
 }
 
@@ -43,6 +49,7 @@ func Load() (*Config, error) {
 	v.SetDefault("default_provider", "ollama")
 	v.SetDefault("agent.max_iterations", 10)
 	v.SetDefault("server.port", 8080)
+	v.SetDefault("storage.db_path", filepath.Join(os.Getenv("HOME"), ".forge", "forge.db"))
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)

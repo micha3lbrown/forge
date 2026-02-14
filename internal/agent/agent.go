@@ -239,6 +239,11 @@ func (a *Agent) trimHistory(keepLast int) {
 	a.history = append([]llm.Message{system}, recent...)
 }
 
+// SetHistory replaces the conversation history (used when resuming a session).
+func (a *Agent) SetHistory(messages []llm.Message) {
+	a.history = messages
+}
+
 // Reset clears conversation history (keeps system prompt).
 func (a *Agent) Reset() {
 	a.history = a.history[:1]
