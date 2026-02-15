@@ -18,21 +18,26 @@ Always explain what you're doing and why. After using a tool, interpret the resu
 // Agent manages a conversation and executes the ReAct loop.
 type Agent struct {
 	llm          llm.Client
+	utilityLLM   llm.Client // optional, for summarization/titles
 	registry     *tools.Registry
 	history      []llm.Message
 	tools        []llm.ToolDef
 	maxIter      int
+	maxTokens    int
 	OnToolCall   func(name string, args map[string]any)
 	OnToolResult func(name string, result string)
 	OnTextDelta  func(delta string)
 }
 
+const defaultMaxTokens = 6000
+
 // New creates an Agent with the given LLM client, tool registry, and iteration limit.
 func New(client llm.Client, registry *tools.Registry, maxIterations int) *Agent {
 	a := &Agent{
-		llm:      client,
-		registry: registry,
-		maxIter:  maxIterations,
+		llm:       client,
+		registry:  registry,
+		maxIter:   maxIterations,
+		maxTokens: defaultMaxTokens,
 		history: []llm.Message{
 			llm.SystemMessage(defaultSystemPrompt),
 		},
@@ -72,9 +77,70 @@ func (a *Agent) FilterTools(names []string) {
 	a.tools = filtered
 }
 
+// SetMaxTokens sets the context window token budget for history compaction.
+func (a *Agent) SetMaxTokens(maxTokens int) {
+	if maxTokens > 0 {
+		a.maxTokens = maxTokens
+	}
+}
+
+// SetUtilityLLM sets an optional lightweight LLM client for housekeeping tasks
+// like summarization and title generation.
+func (a *Agent) SetUtilityLLM(client llm.Client) {
+	a.utilityLLM = client
+}
+
+// SetClient swaps the main conversation LLM client (for mid-session model switching).
+func (a *Agent) SetClient(client llm.Client) {
+	a.llm = client
+}
+
+// compactHistory summarizes older messages when history exceeds the token budget.
+func (a *Agent) compactHistory(ctx context.Context) error {
+	total := estimateHistoryTokens(a.history)
+	if total <= a.maxTokens {
+		return nil
+	}
+
+	// Keep recent messages within 60% of budget
+	recentBudget := a.maxTokens * 60 / 100
+	splitIdx := findSplitPoint(a.history, recentBudget)
+	if splitIdx >= len(a.history) {
+		return nil // nothing to compact
+	}
+
+	// Old messages are indices 1 through splitIdx-1 (skip system prompt at 0)
+	oldMessages := a.history[1:splitIdx]
+	if len(oldMessages) == 0 {
+		return nil
+	}
+
+	summarizer := a.llm
+	if a.utilityLLM != nil {
+		summarizer = a.utilityLLM
+	}
+	summary, err := summarizeMessages(ctx, summarizer, oldMessages)
+	if err != nil {
+		// Fallback: simple trim, keep last few messages
+		a.trimHistory(10)
+		return nil
+	}
+
+	// Rebuild history: system prompt + summary + recent messages
+	summaryMsg := llm.SystemMessage("[Prior conversation summary]\n" + summary)
+	newHistory := make([]llm.Message, 0, 2+len(a.history)-splitIdx)
+	newHistory = append(newHistory, a.history[0]) // system prompt
+	newHistory = append(newHistory, summaryMsg)
+	newHistory = append(newHistory, a.history[splitIdx:]...)
+	a.history = newHistory
+
+	return nil
+}
+
 // Run sends a user message and executes the full ReAct loop.
 // Returns the final assistant text response.
 func (a *Agent) Run(ctx context.Context, userMessage string) (string, error) {
+	a.compactHistory(ctx)
 	a.history = append(a.history, llm.UserMessage(userMessage))
 
 	for i := 0; i < a.maxIter; i++ {
@@ -112,6 +178,7 @@ func (a *Agent) Run(ctx context.Context, userMessage string) (string, error) {
 
 // RunStreaming is like Run but streams text output token-by-token via OnTextDelta.
 func (a *Agent) RunStreaming(ctx context.Context, userMessage string) (string, error) {
+	a.compactHistory(ctx)
 	a.history = append(a.history, llm.UserMessage(userMessage))
 
 	for i := 0; i < a.maxIter; i++ {

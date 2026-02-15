@@ -18,8 +18,9 @@ type ProviderConfig struct {
 }
 
 type AgentConfig struct {
-	MaxIterations int    `mapstructure:"max_iterations"`
-	ProfilesDir   string `mapstructure:"profiles_dir"`
+	MaxIterations   int    `mapstructure:"max_iterations"`
+	ProfilesDir     string `mapstructure:"profiles_dir"`
+	ContextMaxTokens int   `mapstructure:"context_max_tokens"`
 }
 
 type ServerConfig struct {
@@ -48,6 +49,7 @@ func Load() (*Config, error) {
 
 	v.SetDefault("default_provider", "ollama")
 	v.SetDefault("agent.max_iterations", 10)
+	v.SetDefault("agent.context_max_tokens", 6000)
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("storage.db_path", filepath.Join(os.Getenv("HOME"), ".forge", "forge.db"))
 

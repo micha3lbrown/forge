@@ -127,6 +127,14 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	client := llm.NewClient(provider.BaseURL, provider.APIKey, model)
 	a := agent.New(client, registry, maxIter)
+	a.SetMaxTokens(cfg.Agent.ContextMaxTokens)
+
+	// Create utility LLM if configured
+	if utilityModel, ok := provider.Models["utility"]; ok && utilityModel != "" {
+		utilityClient := llm.NewClient(provider.BaseURL, provider.APIKey, utilityModel)
+		a.SetUtilityLLM(utilityClient)
+		fmt.Printf("Utility model: %s\n", utilityModel)
+	}
 
 	// Apply profile overrides
 	if profile != nil {
@@ -163,6 +171,15 @@ func runChat(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("creating session: %w", err)
 		}
 		fmt.Printf("Session: %s\n", sess.ID[:8])
+	}
+
+	cs := &chatState{
+		agent:        a,
+		cfg:          cfg,
+		providerName: providerName,
+		model:        model,
+		sess:         sess,
+		store:        store,
 	}
 
 	fmt.Printf("Type /help for commands, /quit to exit\n\n")
@@ -240,7 +257,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 		// Handle slash commands
 		if strings.HasPrefix(input, "/") {
-			if handleCommand(input, a) {
+			if handleCommand(input, cs) {
 				continue
 			}
 		}
@@ -289,29 +306,84 @@ func generateTitle(firstMessage string) string {
 	return t
 }
 
-func handleCommand(input string, a *agent.Agent) bool {
-	switch strings.ToLower(strings.Fields(input)[0]) {
+// chatState holds mutable session state for the chat loop.
+type chatState struct {
+	agent        *agent.Agent
+	cfg          *config.Config
+	providerName string
+	model        string
+	sess         *storage.Session
+	store        storage.Store
+}
+
+func handleCommand(input string, cs *chatState) bool {
+	fields := strings.Fields(input)
+	switch strings.ToLower(fields[0]) {
 	case "/quit", "/exit", "/q":
 		fmt.Println("Goodbye!")
 		os.Exit(0)
 	case "/reset":
-		a.Reset()
+		cs.agent.Reset()
 		fmt.Println("Conversation reset.")
 		fmt.Println()
 	case "/history":
-		fmt.Println(a.HistoryJSON())
+		fmt.Println(cs.agent.HistoryJSON())
 		fmt.Println()
+	case "/model":
+		handleModelCommand(fields[1:], cs)
 	case "/help":
 		fmt.Println("Commands:")
-		fmt.Println("  /help     - Show this help")
-		fmt.Println("  /reset    - Clear conversation history")
-		fmt.Println("  /history  - Show raw conversation history (JSON)")
-		fmt.Println("  /quit     - Exit")
+		fmt.Println("  /help              - Show this help")
+		fmt.Println("  /model             - Show current provider and model")
+		fmt.Println("  /model <model>     - Switch model (e.g. /model qwen3:8b)")
+		fmt.Println("  /model <p>/<model> - Switch provider and model (e.g. /model claude/claude-sonnet-4-5-20250929)")
+		fmt.Println("  /reset             - Clear conversation history")
+		fmt.Println("  /history           - Show raw conversation history (JSON)")
+		fmt.Println("  /quit              - Exit")
 		fmt.Println()
 	default:
 		fmt.Printf("Unknown command: %s (try /help)\n\n", input)
 	}
 	return true
+}
+
+func handleModelCommand(args []string, cs *chatState) {
+	// No args: show current model
+	if len(args) == 0 {
+		fmt.Printf("Provider: %s | Model: %s\n\n", cs.providerName, cs.model)
+		return
+	}
+
+	target := args[0]
+	newProvider := cs.providerName
+	newModel := target
+
+	// Check for provider/model syntax
+	if idx := strings.Index(target, "/"); idx > 0 {
+		newProvider = target[:idx]
+		newModel = target[idx+1:]
+	}
+
+	// Look up provider config
+	providerCfg, err := cs.cfg.Provider(newProvider)
+	if err != nil {
+		fmt.Printf("Error: %v\n\n", err)
+		return
+	}
+
+	// Create new client and swap
+	newClient := llm.NewClient(providerCfg.BaseURL, providerCfg.APIKey, newModel)
+	cs.agent.SetClient(newClient)
+	cs.providerName = newProvider
+	cs.model = newModel
+
+	// Update session metadata
+	cs.sess.Provider = newProvider
+	cs.sess.Model = newModel
+	ctx := context.Background()
+	cs.store.UpdateSession(ctx, cs.sess)
+
+	fmt.Printf("Switched to %s/%s\n\n", newProvider, newModel)
 }
 
 // pickOllamaModel queries Ollama for available models and lets the user choose.
