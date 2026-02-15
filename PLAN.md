@@ -24,22 +24,24 @@ Forge is a local-first agentic AI platform for learning and building with AI age
 - [x] Ollama interactive model selection
 - [x] Signal handling (Ctrl+C cancellation, graceful shutdown)
 
-## Roadmap
-
 ### Phase 3 — Persistence & Context
 - [x] Conversation persistence (save/load chat sessions)
 - [x] Session management (list, resume, delete past conversations)
 - [x] Chat export (markdown, JSON)
-- [ ] RAG pipeline — chunk, embed, and retrieve local documents
-- [ ] Vector storage backend (SQLite with vector extensions or similar)
-- [ ] Context window management (summarization, sliding window)
+- [x] Context window management (summarization, sliding window)
+
+### Phase 3.5 — Quality of Life
+- [x] Utility model support (separate model for non-chat tasks)
+- [x] `/model` slash command for mid-conversation provider/model switching
 
 ### Phase 4 — Server Mode & API
-- [ ] HTTP/WebSocket server (`forge serve`)
-- [ ] REST API for chat, sessions, and tool management
-- [ ] Multi-session support (concurrent conversations)
-- [ ] API key authentication
-- [ ] Web UI frontend (lightweight, single-page)
+- [x] HTTP/WebSocket server (`forge serve`) — Chi router, gorilla/websocket
+- [x] REST API for sessions, messages, providers, and models
+- [x] Multi-session support (concurrent conversations via SessionManager)
+- [x] WebSocket streaming with agent callback bridging
+- [x] Web UI frontend (Svelte+Vite SPA, embedded in binary via go:embed)
+
+## Roadmap
 
 ### Phase 5 — Advanced Agents
 - [ ] Multi-agent orchestration (agents delegating to sub-agents)

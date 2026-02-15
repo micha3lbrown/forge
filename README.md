@@ -11,6 +11,10 @@ A local agentic AI platform built in Go. Forge connects to multiple LLM provider
 - **Agent profiles** — Swappable personalities with different system prompts, tools, and providers
 - **Docker sandbox** — Secure code execution with resource limits and network isolation
 - **Interactive CLI** — Readline-based chat with history, slash commands, and Ctrl+C cancellation
+- **Session persistence** — SQLite-backed storage with save, resume, export (Markdown/JSON)
+- **Web UI** — Svelte+Vite SPA with sidebar navigation, real-time streaming via WebSocket
+- **Server mode** — REST API and WebSocket server for programmatic access
+- **Mid-conversation model switching** — Change provider/model on the fly with `/model`
 
 ## Quick Start
 
@@ -18,6 +22,7 @@ A local agentic AI platform built in Go. Forge connects to multiple LLM provider
 
 - Go 1.23+
 - Docker (for code execution sandbox)
+- Node.js 18+ (for building the web UI)
 - An LLM provider: [Ollama](https://ollama.com) running locally, or API keys for Claude/Gemini
 
 ### Setup
@@ -38,7 +43,7 @@ make all
 make chat
 ```
 
-### Usage
+### CLI Usage
 
 ```bash
 # Default provider (Ollama)
@@ -53,39 +58,94 @@ make chat
 
 # Use an agent profile
 ./bin/forge chat --profile coder
+
+# Resume a previous session
+./bin/forge chat --resume <session-id>
 ```
+
+### Session Management
+
+```bash
+# List saved sessions
+./bin/forge sessions list
+./bin/forge sessions list --status active --limit 10
+
+# Show session details
+./bin/forge sessions show <id>
+
+# Resume a session
+./bin/forge sessions resume <id>
+
+# Export a session
+./bin/forge sessions export <id> --format md --output chat.md
+./bin/forge sessions export <id> --format json
+
+# Delete a session
+./bin/forge sessions delete <id>
+```
+
+### Web Server
+
+```bash
+# Start the web server (default port from config)
+./bin/forge serve
+
+# Specify a port
+./bin/forge serve --port 9090
+```
+
+The web UI is available at the root URL. API endpoints are under `/api`.
 
 ### Slash Commands
 
-| Command    | Description                  |
-|------------|------------------------------|
-| `/help`    | Show available commands      |
-| `/quit`    | Exit the chat                |
-| `/reset`   | Clear conversation history   |
-| `/history` | Show conversation history    |
+| Command           | Description                          |
+|-------------------|--------------------------------------|
+| `/help`           | Show available commands              |
+| `/quit` `/exit`   | Exit the chat                        |
+| `/reset`          | Clear conversation history           |
+| `/history`        | Show conversation history            |
+| `/model`          | Show current provider and model      |
+| `/model <model>`  | Switch to a different model          |
+| `/model <provider>/<model>` | Switch provider and model  |
 
 ## Architecture
 
 ```
-User ──► CLI (cmd/forge) ──► Agent (ReAct Loop) ──► LLM Client
-                                    │                     │
-                                    ▼                     ▼
-                             MCP Tool Registry     Provider API
-                                    │              (Ollama/Claude/Gemini)
-                                    ▼
-                             Tool Servers (stdio)
-                             ├── shell-exec
-                             ├── file-ops
-                             ├── web-search
-                             ├── github-ops
-                             └── code-runner
+                    ┌─────────────────────────────────────────────┐
+                    │              Agent (ReAct Loop)              │
+                    │         Think → Act → Observe cycle          │
+                    └──────┬──────────────────┬───────────────────┘
+                           │                  │
+                           ▼                  ▼
+                    MCP Tool Registry    LLM Client
+                           │            (OpenAI-compatible)
+                           ▼                  │
+                    Tool Servers (stdio)       ▼
+                    ├── shell-exec       Provider API
+                    ├── file-ops         (Ollama/Claude/Gemini)
+                    ├── web-search
+                    ├── github-ops
+                    └── code-runner
+                           ▲                  ▲
+                           │                  │
+            ┌──────────────┴──────────────────┴──────────────┐
+            │                                                │
+   ┌────────┴────────┐                          ┌────────────┴───────────┐
+   │   CLI (chat)    │                          │   Server (serve)       │
+   │  Interactive     │                          │  REST API + WebSocket  │
+   │  Readline REPL   │                          │  Svelte Web UI         │
+   └─────────────────┘                          └────────────────────────┘
 ```
 
 ### Project Structure
 
 ```
 cmd/
-  forge/              CLI entry point and chat loop
+  forge/              CLI entry point
+    main.go           Root command, global flags
+    chat.go           Chat command and slash commands
+    serve.go          Web server command
+    sessions.go       Session management commands
   tools/              MCP tool server binaries
     shell-exec/       Shell command execution
     file-ops/         File read/write/patch/list
@@ -98,11 +158,33 @@ internal/
   tools/              MCP registry and client
   config/             Configuration loading (Viper)
   sandbox/            Docker sandbox with security policies
-  server/             Server mode (planned)
+  server/             HTTP server, routes, WebSocket
+  storage/            Persistence interface
+    sqlite/           SQLite implementation
   rag/                RAG pipeline (planned)
+web/                  Svelte+Vite frontend (embedded in binary)
+  src/
+    components/       Sidebar, ChatView, etc.
+    lib/              API client, WebSocket, state stores
 configs/
   agents/             Agent profile definitions (YAML)
 ```
+
+## REST API
+
+The server exposes a REST API under `/api`:
+
+| Method | Endpoint                       | Description                    |
+|--------|--------------------------------|--------------------------------|
+| GET    | `/api/sessions`                | List sessions                  |
+| POST   | `/api/sessions`                | Create a new session           |
+| GET    | `/api/sessions/{id}`           | Get session details            |
+| DELETE | `/api/sessions/{id}`           | Delete a session               |
+| GET    | `/api/sessions/{id}/messages`  | Get messages for a session     |
+| POST   | `/api/sessions/{id}/messages`  | Send a message                 |
+| GET    | `/api/sessions/{id}/ws`        | WebSocket for streaming        |
+| GET    | `/api/providers`               | List available providers       |
+| GET    | `/api/models/{provider}`       | List models for a provider     |
 
 ## Configuration
 
@@ -169,6 +251,21 @@ make build-tools  # Build all tool servers
 make all          # Build everything
 make test         # Run tests
 make clean        # Remove build artifacts
+make install      # Install binaries to /usr/local/bin
+make chat         # Build and run interactive chat
+```
+
+To build and run the web UI in development mode:
+
+```bash
+cd web && npm install && npm run dev   # Vite dev server with HMR
+```
+
+For production, the web assets are built and embedded into the Go binary:
+
+```bash
+cd web && npm run build   # Build to web/dist/
+go build -o bin/forge ./cmd/forge   # Embeds web/dist/ via go:embed
 ```
 
 ## License
