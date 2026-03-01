@@ -79,6 +79,14 @@ export function sendMessage(sessionId: string, content: string): Promise<{ conte
   });
 }
 
+export function updateSession(id: string, updates: { provider?: string; model?: string }): Promise<Session> {
+  return request(`/sessions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+}
+
 export function listProviders(): Promise<Provider[]> {
   return request('/providers');
 }

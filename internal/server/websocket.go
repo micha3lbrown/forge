@@ -11,6 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 
+	"github.com/michaelbrown/forge/internal/config"
+	"github.com/michaelbrown/forge/internal/llm"
 	"github.com/michaelbrown/forge/internal/storage"
 )
 
@@ -28,18 +30,18 @@ type wsIncoming struct {
 
 // wsOutgoing is a message to the client.
 type wsOutgoing struct {
-	Type    string `json:"type"`
-	Content string `json:"content,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Args    any    `json:"args,omitempty"`
+	Type            string                  `json:"type"`
+	Content         string                  `json:"content,omitempty"`
+	Name            string                  `json:"name,omitempty"`
+	Args            any                     `json:"args,omitempty"`
+	FallbackOptions []config.FallbackOption  `json:"fallback_options,omitempty"`
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	// Verify session exists
-	sess, err := s.store.GetSession(r.Context(), id)
-	if err != nil {
+	if _, err := s.store.GetSession(r.Context(), id); err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
@@ -52,18 +54,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Get or create active session
-	as, err := s.sessions.GetOrCreate(r.Context(), sess, s.cfg, s.store, s.registry)
-	if err != nil {
-		wsWriteJSON(conn, wsOutgoing{Type: "error", Content: fmt.Sprintf("initializing agent: %v", err)})
-		return
-	}
-
-	// Read loop
+	// Read loop — re-fetch session and agent on each message so model
+	// changes via PATCH take effect without reconnecting.
 	for {
 		var msg wsIncoming
 		if err := conn.ReadJSON(&msg); err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 				return
 			}
 			log.Printf("websocket read error: %v", err)
@@ -75,7 +71,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Process message with agent
+		// Re-read session from DB to pick up model/provider changes
+		sess, err := s.store.GetSession(context.Background(), id)
+		if err != nil {
+			wsWriteJSON(conn, wsOutgoing{Type: "error", Content: "session not found"})
+			return
+		}
+
+		as, err := s.sessions.GetOrCreate(context.Background(), sess, s.cfg, s.store, s.registry)
+		if err != nil {
+			wsWriteJSON(conn, wsOutgoing{Type: "error", Content: fmt.Sprintf("initializing agent: %v", err)})
+			continue
+		}
+
 		s.processWebSocketMessage(conn, as, sess, msg.Content)
 	}
 }
@@ -134,7 +142,11 @@ func (s *Server) processWebSocketMessage(conn *websocket.Conn, as *ActiveSession
 		if ctx.Err() != nil {
 			wsWriteJSON(conn, wsOutgoing{Type: "error", Content: "interrupted"})
 		} else {
-			wsWriteJSON(conn, wsOutgoing{Type: "error", Content: err.Error()})
+			out := wsOutgoing{Type: "error", Content: err.Error()}
+			if llm.IsFallbackEligible(err) {
+				out.FallbackOptions = s.cfg.FallbackProviders(sess.Provider)
+			}
+			wsWriteJSON(conn, out)
 		}
 		return
 	}

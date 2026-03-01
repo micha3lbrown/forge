@@ -1,9 +1,10 @@
 providers:
   ollama:
-    base_url: "http://192.168.1.174:11434/v1/"
+    base_url: "http://192.168.1.42:11434/v1/"
     api_key: "ollama"
     models:
-      default: "qwen3:14b"
+      default: "qwen3:32b"
+      utility: "qwen3:4b"
       embedding: "nomic-embed-text"
   claude:
     base_url: "https://api.anthropic.com/v1/"
@@ -23,6 +24,11 @@ providers:
       3-flash-preview: "gemini-3-flash-preview"
 
 default_provider: ollama
+
+fallback:
+  ollama: ["gemini", "claude"]
+  gemini: ["claude"]
+  claude: ["gemini"]
 
 agent:
   max_iterations: 10

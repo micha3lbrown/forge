@@ -1,10 +1,16 @@
 export type WSEventType = 'text_delta' | 'tool_call' | 'tool_result' | 'done' | 'error';
 
+export interface FallbackOption {
+  provider: string;
+  model: string;
+}
+
 export interface WSEvent {
   type: WSEventType;
   content?: string;
   name?: string;
   args?: Record<string, any>;
+  fallback_options?: FallbackOption[];
 }
 
 export type WSEventHandler = (event: WSEvent) => void;

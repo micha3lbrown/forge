@@ -124,6 +124,65 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	sess, err := s.store.GetSession(r.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "session not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	var req struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// If only model is set and it matches a provider name, treat it as a provider switch
+	if req.Provider == "" && req.Model != "" {
+		if p, ok := s.cfg.Providers[req.Model]; ok {
+			req.Provider = req.Model
+			req.Model = p.Models["default"]
+		}
+	}
+
+	if req.Provider != "" {
+		// Validate provider exists
+		if _, err := s.cfg.Provider(req.Provider); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sess.Provider = req.Provider
+		// If switching provider without specifying a model, use provider's default
+		if req.Model == "" {
+			if p, ok := s.cfg.Providers[req.Provider]; ok {
+				sess.Model = p.Models["default"]
+			}
+		}
+	}
+	if req.Model != "" {
+		sess.Model = req.Model
+	}
+
+	if err := s.store.UpdateSession(r.Context(), sess); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Evict active session so it gets recreated with new model
+	s.sessions.Remove(sess.ID)
+
+	writeJSON(w, http.StatusOK, sess)
+}
+
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -251,16 +310,15 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For Ollama, query live models
+	// For Ollama, query live models with fallback to config
 	if provider.IsOllama() {
 		client := llm.NewClient(provider.BaseURL, provider.APIKey, "")
 		models, err := client.ListModels(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("querying models: %v", err))
+		if err == nil && len(models) > 0 {
+			writeJSON(w, http.StatusOK, models)
 			return
 		}
-		writeJSON(w, http.StatusOK, models)
-		return
+		// Fall through to configured models if Ollama is unreachable
 	}
 
 	// For other providers, return configured models

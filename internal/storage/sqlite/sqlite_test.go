@@ -174,6 +174,37 @@ func TestUpdateSession(t *testing.T) {
 	}
 }
 
+func TestUpdateSession_ProviderAndModel(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	sess := &storage.Session{
+		ID:       "upd-model",
+		Status:   storage.StatusActive,
+		Provider: "ollama",
+		Model:    "qwen3:14b",
+	}
+	s.CreateSession(ctx, sess)
+
+	// Update provider and model
+	sess.Provider = "claude"
+	sess.Model = "claude-sonnet-4-5-20250929"
+	if err := s.UpdateSession(ctx, sess); err != nil {
+		t.Fatalf("UpdateSession: %v", err)
+	}
+
+	got, err := s.GetSession(ctx, "upd-model")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Provider != "claude" {
+		t.Errorf("provider = %q, want %q", got.Provider, "claude")
+	}
+	if got.Model != "claude-sonnet-4-5-20250929" {
+		t.Errorf("model = %q, want %q", got.Model, "claude-sonnet-4-5-20250929")
+	}
+}
+
 func TestDeleteSession(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

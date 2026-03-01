@@ -290,7 +290,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 				fmt.Println("\n(interrupted)")
 				continue
 			}
-			fmt.Printf("\n\033[31merror: %s\033[0m\n\n", err)
+			fmt.Printf("\n\033[31merror: %s\033[0m\n", err)
+			if llm.IsFallbackEligible(err) {
+				if opts := cfg.FallbackProviders(cs.providerName); len(opts) > 0 {
+					fmt.Printf("  \033[33mhint: try /model %s/%s\033[0m\n", opts[0].Provider, opts[0].Model)
+				}
+			}
+			fmt.Println()
 			continue
 		}
 
@@ -335,6 +341,7 @@ func handleCommand(input string, cs *chatState) bool {
 		fmt.Println("Commands:")
 		fmt.Println("  /help              - Show this help")
 		fmt.Println("  /model             - Show current provider and model")
+		fmt.Println("  /model <provider>  - Switch provider (e.g. /model gemini)")
 		fmt.Println("  /model <model>     - Switch model (e.g. /model qwen3:8b)")
 		fmt.Println("  /model <p>/<model> - Switch provider and model (e.g. /model claude/claude-sonnet-4-5-20250929)")
 		fmt.Println("  /reset             - Clear conversation history")
@@ -362,6 +369,10 @@ func handleModelCommand(args []string, cs *chatState) {
 	if idx := strings.Index(target, "/"); idx > 0 {
 		newProvider = target[:idx]
 		newModel = target[idx+1:]
+	} else if p, ok := cs.cfg.Providers[target]; ok {
+		// Bare provider name — switch to its default model
+		newProvider = target
+		newModel = p.Models["default"]
 	}
 
 	// Look up provider config

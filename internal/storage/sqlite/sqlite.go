@@ -145,8 +145,8 @@ func (s *SQLiteStore) ListSessions(ctx context.Context, opts storage.SessionList
 func (s *SQLiteStore) UpdateSession(ctx context.Context, sess *storage.Session) error {
 	sess.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE sessions SET title = ?, status = ?, updated_at = ? WHERE id = ?`,
-		sess.Title, sess.Status, sess.UpdatedAt.Format(time.RFC3339), sess.ID,
+		UPDATE sessions SET title = ?, status = ?, provider = ?, model = ?, updated_at = ? WHERE id = ?`,
+		sess.Title, sess.Status, sess.Provider, sess.Model, sess.UpdatedAt.Format(time.RFC3339), sess.ID,
 	)
 	return err
 }

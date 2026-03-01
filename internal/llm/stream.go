@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/openai/openai-go"
@@ -37,11 +36,13 @@ func (c *OpenAICompatClient) ChatCompletionStream(ctx context.Context, messages 
 		if err == nil {
 			break
 		}
-		if !strings.Contains(err.Error(), "429") || attempt == 2 {
-			return nil, fmt.Errorf("chat completion stream: %w", err)
+		llmErr := NewLLMError(err)
+		if !llmErr.IsRetryable() || attempt == 2 {
+			return nil, fmt.Errorf("chat completion stream: %w", llmErr)
 		}
 		stream.Close()
 		wait := time.Duration(2<<attempt) * time.Second
+		fmt.Printf("\n  (%s, retrying in %s...)\n", llmErr.Kind, wait)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():

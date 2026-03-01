@@ -31,6 +31,12 @@ type StorageConfig struct {
 	DBPath string `mapstructure:"db_path"`
 }
 
+// FallbackOption represents a provider/model pair the user can switch to.
+type FallbackOption struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
 type Config struct {
 	Providers       map[string]ProviderConfig        `mapstructure:"providers"`
 	DefaultProvider string                           `mapstructure:"default_provider"`
@@ -38,6 +44,34 @@ type Config struct {
 	Server          ServerConfig                     `mapstructure:"server"`
 	Storage         StorageConfig                    `mapstructure:"storage"`
 	Tools           map[string]tools.ToolServerConfig `mapstructure:"tools"`
+	Fallback        map[string][]string              `mapstructure:"fallback"`
+}
+
+// FallbackProviders returns available fallback options for the given provider.
+// Providers without API keys (except Ollama) are filtered out.
+func (c *Config) FallbackProviders(currentProvider string) []FallbackOption {
+	chain, ok := c.Fallback[currentProvider]
+	if !ok || len(chain) == 0 {
+		return nil
+	}
+
+	var opts []FallbackOption
+	for _, name := range chain {
+		p, ok := c.Providers[name]
+		if !ok {
+			continue
+		}
+		// Ollama doesn't need an API key; cloud providers do
+		if !p.IsOllama() && p.APIKey == "" {
+			continue
+		}
+		model := p.Models["default"]
+		if model == "" {
+			model = "default"
+		}
+		opts = append(opts, FallbackOption{Provider: name, Model: model})
+	}
+	return opts
 }
 
 func Load() (*Config, error) {

@@ -64,3 +64,4 @@ Forge is a local-first agentic AI platform for learning and building with AI age
 3. **Provider-agnostic** — Any OpenAI-compatible API works. Ollama, Claude, Gemini, or your own endpoint.
 4. **Safe by default** — Code runs in Docker sandboxes. Tools can be restricted per profile. No silent destructive actions.
 5. **Simple to extend** — Adding a new tool means writing a small Go binary that speaks MCP over stdio.
+6. **Test-driven** — Write tests first, implement second. All new features and bug fixes start with a failing test.

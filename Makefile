@@ -1,6 +1,6 @@
 .PHONY: build build-tools run chat serve test clean install uninstall
 
-PREFIX ?= /usr/local
+PREFIX ?= $(HOME)/.local
 BINDIR = $(PREFIX)/bin
 CONFIGDIR = $(HOME)/.forge
 
@@ -25,8 +25,10 @@ install: all
 	@echo "Installing binaries to $(BINDIR)..."
 	install -d $(BINDIR)
 	install bin/forge $(BINDIR)/forge
+	@codesign -f -s - $(BINDIR)/forge 2>/dev/null || true
 	@for tool in $(TOOLS); do \
 		install bin/forge-tool-$$tool $(BINDIR)/forge-tool-$$tool; \
+		codesign -f -s - $(BINDIR)/forge-tool-$$tool 2>/dev/null || true; \
 	done
 	@echo "Setting up config in $(CONFIGDIR)..."
 	install -d $(CONFIGDIR)
