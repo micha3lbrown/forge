@@ -33,6 +33,7 @@ func NewClient(baseURL, apiKey, model string) *OpenAICompatClient {
 	client := openai.NewClient(
 		option.WithBaseURL(baseURL),
 		option.WithAPIKey(apiKey),
+		option.WithRequestTimeout(10*time.Second),
 	)
 	return &OpenAICompatClient{
 		client:  &client,
@@ -58,11 +59,12 @@ func (c *OpenAICompatClient) ChatCompletion(ctx context.Context, messages []Mess
 		if err == nil {
 			break
 		}
-		if !strings.Contains(err.Error(), "429") || attempt == 2 {
-			return nil, fmt.Errorf("chat completion: %w", err)
+		llmErr := NewLLMError(err)
+		if !llmErr.IsRetryable() || attempt == 2 {
+			return nil, fmt.Errorf("chat completion: %w", llmErr)
 		}
 		wait := time.Duration(2<<attempt) * time.Second // 2s, 4s
-		fmt.Printf("\n  (rate limited, retrying in %s...)\n", wait)
+		fmt.Printf("\n  (%s, retrying in %s...)\n", llmErr.Kind, wait)
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
